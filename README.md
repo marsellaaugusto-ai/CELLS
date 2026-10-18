@@ -10,6 +10,9 @@ Hoja de cálculo online, con fórmulas en español y sincronización con otras a
 - Formato: negrita, cursiva, alineación, moneda, porcentaje, decimales y color de celda.
 - Varias hojas por libro (doble clic para renombrar, clic derecho para borrar).
 - Gráfico de barras de la selección.
+- **Abrir y guardar archivos de Excel (.xlsx)** con fórmulas, formatos, celdas combinadas, notas,
+  listas desplegables, filas fijas y rangos con nombre. Al abrir, un informe dice qué se trajo y
+  qué no. Es también el camino desde y hacia Google Sheets.
 - Importar y exportar CSV, exportar JSON.
 - Guardado automático: en el navegador, o en la nube con login por email si configurás Supabase.
 - **Edición en vivo**: varias personas en el mismo libro a la vez, viendo el cursor de cada una.
@@ -47,6 +50,15 @@ distintas personas se combinan solos.
 
 Si ya habías ejecutado `supabase/schema.sql` antes, ejecutalo de nuevo: agrega lo necesario sin borrar datos.
 
+## Excel y Google Sheets
+
+- **Abrir**: Archivo → *Abrir archivo de Excel o CSV…*. Desde Google Sheets: Archivo → Descargar →
+  Microsoft Excel (.xlsx), y abrir ese archivo en Cells.
+- **Guardar**: Archivo → *Descargar .xlsx*. Para llevarlo a Google Sheets, subirlo a Google Drive y
+  abrirlo con Hojas de cálculo de Google.
+
+El detalle de qué se conserva está en [`docs/relevamiento-y-hoja-de-ruta.md`](docs/relevamiento-y-hoja-de-ruta.md).
+
 ## Publicarlo en internet (gratis)
 
 El repositorio es privado, así que GitHub Pages no sirve en el plan gratuito. Usá Vercel, Netlify o Cloudflare Pages:
@@ -74,6 +86,7 @@ usuario con acceso. Por ahora la API es de lectura: escribir celdas desde otras 
 |---|---|
 | `src/engine` | Motor de fórmulas, traducción del español y formato de números |
 | `src/state` | Cambios al libro (insertar, formatear, ordenar, pegar…) |
+| `src/io` | Abrir y guardar archivos de Excel |
 | `src/collab` | Documento compartido, deshacer por persona, presencia y conexión en vivo |
 | `src/storage` | Guardado en el navegador o en Supabase |
 | `src/components` | Interfaz: menú lateral, paneles, cuadrícula y gráfico |

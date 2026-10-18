@@ -221,14 +221,18 @@ button { cursor: pointer; }
   display: flex; align-items: center; justify-content: center;
   z-index: 1;
 }
-.corner { top: 0; left: 0; z-index: 3; }
-.col-head { top: 0; height: 26px; padding-top: 6px; }
+.corner { top: 0; left: 0; z-index: 5; }
+.col-head { top: 0; height: 26px; padding-top: 6px; z-index: 3; }
+.row-head { z-index: 3; }
+.col-resize {
+  position: absolute; top: 0; right: calc(-1 * var(--gap) / 2 - 3px); width: 7px; height: 100%;
+  cursor: col-resize; z-index: 1;
+}
+.col-resize:hover { background: var(--accent); opacity: 0.6; border-radius: 3px; }
 .row-head { left: 0; }
 .col-head.on, .row-head.on { color: var(--text); }
 
 .cell {
-  height: var(--row-h);
-  width: var(--col-w);
   border-radius: 6px;
   background: var(--tile);
   padding: 0 10px;
@@ -288,8 +292,18 @@ button { cursor: pointer; }
 .people li { display: flex; align-items: center; gap: 6px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .peer-tag {
-  position: absolute; top: 0; right: 0; max-width: 70%;
-  padding: 0 5px; border-radius: 0 6px 0 5px;
+  position: absolute; top: 0; left: 0; max-width: 70%;
+  padding: 0 5px; border-radius: 6px 0 5px 0;
   font-size: 9px; font-weight: 600; line-height: 12px; color: #0b1219;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none;
 }
+
+/* ---------- Excel extras ---------- */
+.note-mark {
+  position: absolute; top: 0; right: 0; width: 0; height: 0;
+  border-top: 8px solid #e8743b; border-left: 8px solid transparent; border-top-right-radius: 6px;
+}
+.cell.link { color: var(--accent); text-decoration: underline; }
+.cell.approx { outline: 1px dashed var(--muted); outline-offset: -3px; }
+.report ul { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.report h3 { margin: 4px 0 0; font-size: 12px; font-weight: 600; }

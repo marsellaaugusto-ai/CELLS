@@ -6,6 +6,7 @@ import { parseCsv } from '../model/csv';
 import type { Edit } from '../state/workbook';
 import type { Peer } from '../collab/presence';
 import type { CollabState } from '../App';
+import type { ImportReport } from '../io/xlsx';
 import { supabaseUrl } from '../storage/cloud';
 import { Card, PlayIcon, Toggle } from './ui';
 
@@ -34,6 +35,11 @@ export interface PanelProps {
   deleteBook(id: string): void;
   exportCsv(): void;
   exportJson(): void;
+  openFile(file: File): Promise<void>;
+  exportXlsx(): Promise<void>;
+  report: ImportReport | null;
+  clearReport(): void;
+  busy: string | null;
   storeKind: 'local' | 'cloud';
   cloudConfigured: boolean;
   userEmail: string | null;
@@ -92,31 +98,61 @@ export function ArchivoPanel(p: PanelProps) {
           ))}
         </div>
       </Card>
-      <Card title="Importar y exportar">
+      <Card title="Abrir y guardar">
+        <label className="btn-primary" style={{ cursor: 'pointer' }}>
+          Abrir archivo de Excel o CSV…
+          <input
+            type="file"
+            accept=".xlsx,.xlsm,.csv,.tsv,text/csv"
+            hidden
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              if (file) void p.openFile(file);
+            }}
+          />
+        </label>
         <div className="row">
-          <label className="pill" style={{ display: 'inline-flex', alignItems: 'center' }}>
-            Importar CSV…
-            <input
-              type="file"
-              accept=".csv,text/csv,.tsv,text/plain"
-              hidden
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                e.target.value = '';
-                if (!file) return;
-                const rows = parseCsv(await file.text());
-                p.edit({ type: 'paste', sheetId: p.sheet.id, r: p.rect.r0, c: p.rect.c0, rows });
-              }}
-            />
-          </label>
+          <button type="button" className="pill" onClick={() => void p.exportXlsx()}>
+            Descargar .xlsx
+          </button>
           <button type="button" className="pill" onClick={p.exportCsv}>
-            Exportar CSV
+            Descargar CSV
           </button>
           <button type="button" className="pill" onClick={p.exportJson}>
-            Exportar JSON
+            Descargar JSON
           </button>
         </div>
-        <p>El CSV se importa a partir de la celda seleccionada.</p>
+        {p.busy && <p>{p.busy}</p>}
+        <p>
+          Se abre como un libro nuevo. El .xlsx se abre en Excel, LibreOffice, Numbers y Google Sheets con sus fórmulas y
+          formatos.
+        </p>
+      </Card>
+      {p.report && <ReportCard report={p.report} onClose={p.clearReport} />}
+      <Card title="Desde y hacia Google Sheets">
+        <p>
+          <b>Traer:</b> en Google Sheets, Archivo → Descargar → Microsoft Excel (.xlsx), y abrilo acá.
+          <br />
+          <b>Llevar:</b> descargá el .xlsx, subilo a Google Drive y abrilo con Hojas de cálculo de Google.
+        </p>
+      </Card>
+      <Card title="Pegar un CSV en la hoja">
+        <label className="pill" style={{ display: 'inline-flex', alignItems: 'center', alignSelf: 'flex-start' }}>
+          Importar CSV en la selección…
+          <input
+            type="file"
+            accept=".csv,text/csv,.tsv,text/plain"
+            hidden
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              if (!file) return;
+              const rows = parseCsv(await file.text());
+              p.edit({ type: 'paste', sheetId: p.sheet.id, r: p.rect.r0, c: p.rect.c0, rows });
+            }}
+          />
+        </label>
       </Card>
     </>
   );
@@ -167,6 +203,28 @@ export function DatosPanel(p: PanelProps) {
         <Toggle on={p.show.formulas} onChange={(v) => p.setShow({ ...p.show, formulas: v })}>Fórmulas en celdas</Toggle>
         <Toggle on={p.show.compact} onChange={(v) => p.setShow({ ...p.show, compact: v })}>Celdas compactas</Toggle>
       </Card>
+      <Card title="Fijar al desplazarse">
+        <Toggle
+          on={(p.sheet.layout?.frozen?.rows ?? 0) > 0}
+          onChange={(v) => p.edit({ type: 'layout', sheetId: p.sheet.id, patch: { frozen: { rows: v ? 1 : 0, cols: p.sheet.layout?.frozen?.cols ?? 0 } } })}
+        >
+          Primera fila
+        </Toggle>
+        <Toggle
+          on={(p.sheet.layout?.frozen?.cols ?? 0) > 0}
+          onChange={(v) => p.edit({ type: 'layout', sheetId: p.sheet.id, patch: { frozen: { rows: p.sheet.layout?.frozen?.rows ?? 0, cols: v ? 1 : 0 } } })}
+        >
+          Primera columna
+        </Toggle>
+        <button
+          type="button"
+          className="pill"
+          style={{ alignSelf: 'flex-start' }}
+          onClick={() => p.edit({ type: 'layout', sheetId: p.sheet.id, patch: { frozen: { rows: p.rect.r0, cols: p.rect.c0 } } })}
+        >
+          Fijar hasta la selección
+        </button>
+      </Card>
     </>
   );
 }
@@ -202,6 +260,15 @@ export function FormatoPanel(p: PanelProps) {
           <button type="button" className="pill" aria-pressed={!!first.italic} onClick={() => apply({ italic: !first.italic })} style={{ fontStyle: 'italic' }}>
             Cursiva
           </button>
+          <button type="button" className="pill" aria-pressed={!!first.underline} onClick={() => apply({ underline: !first.underline })} style={{ textDecoration: 'underline' }}>
+            Subrayado
+          </button>
+          <button type="button" className="pill" aria-pressed={!!first.strike} onClick={() => apply({ strike: !first.strike })} style={{ textDecoration: 'line-through' }}>
+            Tachado
+          </button>
+          <button type="button" className="pill" aria-pressed={!!first.wrap} onClick={() => apply({ wrap: !first.wrap })}>
+            Ajustar texto
+          </button>
         </div>
         <div className="row">
           {(['left', 'center', 'right'] as const).map((a) => (
@@ -211,14 +278,30 @@ export function FormatoPanel(p: PanelProps) {
           ))}
         </div>
       </Card>
+      <Card title="Celdas">
+        <div className="row">
+          <button type="button" className="pill" disabled={p.rect.r0 === p.rect.r1 && p.rect.c0 === p.rect.c1} onClick={() => p.edit({ type: 'merge', sheetId: p.sheet.id, rect: p.rect })}>
+            Combinar
+          </button>
+          <button type="button" className="pill" onClick={() => p.edit({ type: 'unmerge', sheetId: p.sheet.id, rect: p.rect })}>
+            Separar
+          </button>
+        </div>
+        <p>Al combinar queda solo el valor de arriba a la izquierda, como en Excel.</p>
+      </Card>
       <Card title="Número">
         <div className="row">
           {NUM_FMTS.map((f) => (
-            <button key={f.id} type="button" className="pill" aria-pressed={(first.numFmt ?? 'general') === f.id} onClick={() => apply({ numFmt: f.id })}>
+            <button key={f.id} type="button" className="pill" aria-pressed={!first.numFmtCode && (first.numFmt ?? 'general') === f.id} onClick={() => apply({ numFmt: f.id, numFmtCode: undefined })}>
               {f.label}
             </button>
           ))}
         </div>
+        {first.numFmtCode && (
+          <p>
+            Formato del archivo: <span className="mono">{first.numFmtCode}</span>
+          </p>
+        )}
       </Card>
       <Card title="Color de celda">
         <div className="swatches">
@@ -229,9 +312,9 @@ export function FormatoPanel(p: PanelProps) {
               className="swatch"
               aria-label={t.label}
               title={t.label}
-              aria-pressed={(first.tint ?? 'none') === t.id}
+              aria-pressed={!first.fill && (first.tint ?? 'none') === t.id}
               style={{ background: t.color }}
-              onClick={() => apply({ tint: t.id })}
+              onClick={() => apply({ tint: t.id, fill: undefined })}
             />
           ))}
         </div>
@@ -405,5 +488,48 @@ export function ConectarPanel(p: PanelProps) {
         )}
       </Card>
     </>
+  );
+}
+
+function ReportCard({ report, onClose }: { report: ImportReport; onClose(): void }) {
+  return (
+    <section className="card report" aria-label="Resultado de abrir el archivo">
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <h2>Qué se trajo de {report.fileName}</h2>
+        <button type="button" className="icon-btn" aria-label="Cerrar" onClick={onClose}>
+          ×
+        </button>
+      </div>
+      <p>
+        {report.sheets} {report.sheets === 1 ? 'hoja' : 'hojas'}, {report.cells} celdas, {report.formulas} fórmulas.
+      </p>
+      <h3 className="ok">Funciona igual</h3>
+      <ul>
+        {report.kept.map((k) => (
+          <li key={k}>{k}</li>
+        ))}
+      </ul>
+      {report.preserved.length > 0 && (
+        <>
+          <h3 style={{ color: 'var(--mode)' }}>Se conserva, con límites</h3>
+          <ul>
+            {report.preserved.map((k) => (
+              <li key={k}>{k}</li>
+            ))}
+          </ul>
+        </>
+      )}
+      {report.lost.length > 0 && (
+        <>
+          <h3 className="bad">No se trae todavía</h3>
+          <ul>
+            {report.lost.map((k) => (
+              <li key={k}>{k}</li>
+            ))}
+          </ul>
+          <p>Si guardás desde Cells, estas partes no van a estar en el archivo nuevo. El original no cambia.</p>
+        </>
+      )}
+    </section>
   );
 }

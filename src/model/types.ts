@@ -2,17 +2,75 @@ export type NumFmt = 'general' | 'number2' | 'currency' | 'percent';
 export type Align = 'left' | 'center' | 'right';
 export type Tint = 'none' | 'blue' | 'green' | 'teal' | 'orange' | 'yellow' | 'red' | 'purple';
 
+export type VAlign = 'top' | 'middle' | 'bottom';
+export type BorderStyle = 'thin' | 'medium' | 'thick' | 'dashed' | 'dotted' | 'double' | 'hair';
+
+export interface BorderSide {
+  style: BorderStyle;
+  /** '#rrggbb' */
+  color?: string;
+}
+
 export interface CellFormat {
   bold?: boolean;
   italic?: boolean;
+  underline?: boolean;
+  strike?: boolean;
   align?: Align;
+  valign?: VAlign;
+  wrap?: boolean;
+  /** Presets offered in the Formato panel. */
   numFmt?: NumFmt;
+  /** Excel number format code, e.g. 'dd/mm/yyyy' or '#,##0.00 "kg"'. Wins over numFmt. */
+  numFmtCode?: string;
+  /** Preset tile colors offered in the Formato panel. */
   tint?: Tint;
+  /** Exact background color ('#rrggbb'), e.g. from an imported file. Wins over tint. */
+  fill?: string;
+  /** Exact text color ('#rrggbb'). */
+  color?: string;
+  /** Points, like Excel. */
+  fontSize?: number;
+  fontFamily?: string;
+  border?: { top?: BorderSide; right?: BorderSide; bottom?: BorderSide; left?: BorderSide };
+}
+
+export interface Validation {
+  /** Allowed values when the rule is a plain list, offered as suggestions while typing. */
+  list: string[] | null;
+  /** The rule exactly as it came from Excel, written back unchanged on export. */
+  excel?: unknown;
 }
 
 export interface Cell {
+  /** What the person typed: a value, or a formula starting with '='. A leading ' forces text. */
   raw: string;
   fmt?: CellFormat;
+  /** Comment shown on hover (Excel "note"). */
+  note?: string;
+  link?: string;
+  /** Last value Excel or Google Sheets calculated, used when Cells can't calculate the formula itself. */
+  cached?: number | string | boolean;
+  validation?: Validation;
+}
+
+export interface Range {
+  r0: number;
+  c0: number;
+  r1: number;
+  c1: number;
+}
+
+export interface SheetLayout {
+  /** Pixel widths/heights by 0-based column/row index; missing = default. */
+  colWidths?: Record<string, number>;
+  rowHeights?: Record<string, number>;
+  hiddenCols?: number[];
+  hiddenRows?: number[];
+  merges?: Range[];
+  frozen?: { rows: number; cols: number };
+  /** Conditional formatting rules from Excel, kept so they survive a round trip. */
+  conditional?: unknown[];
 }
 
 export interface Sheet {
@@ -22,6 +80,7 @@ export interface Sheet {
   cells: Record<string, Cell>;
   rows: number;
   cols: number;
+  layout?: SheetLayout;
 }
 
 export interface Workbook {
@@ -29,6 +88,8 @@ export interface Workbook {
   name: string;
   sheets: Sheet[];
   updatedAt: string;
+  /** Named ranges: name → reference, e.g. { Precios: "'Hoja 1'!$D$2:$D$9" }. */
+  names?: Record<string, string>;
 }
 
 export interface WorkbookSummary {

@@ -1,5 +1,7 @@
 import { parseKey, rectKeys, toKey, type Rect } from '../model/address';
-import type { Cell, CellFormat, Sheet, Workbook } from '../model/types';
+
+const overlaps = (a: Rect, b: Rect) => a.r0 <= b.r1 && b.r0 <= a.r1 && a.c0 <= b.c1 && b.c0 <= a.c1;
+import type { Cell, CellFormat, Sheet, SheetLayout, Workbook } from '../model/types';
 import { newSheet } from '../model/types';
 
 export type Edit =
@@ -12,7 +14,10 @@ export type Edit =
   | { type: 'addSheet' }
   | { type: 'renameSheet'; sheetId: string; name: string }
   | { type: 'deleteSheet'; sheetId: string }
-  | { type: 'renameBook'; name: string };
+  | { type: 'renameBook'; name: string }
+  | { type: 'layout'; sheetId: string; patch: Partial<SheetLayout> }
+  | { type: 'merge'; sheetId: string; rect: Rect }
+  | { type: 'unmerge'; sheetId: string; rect: Rect };
 
 function withCell(cells: Record<string, Cell>, key: string, cell: Cell | undefined) {
   const next = { ...cells };
@@ -110,6 +115,27 @@ export function applyEdit(wb: Workbook, edit: Edit): Workbook {
       return wb.sheets.length > 1 ? { ...wb, sheets: wb.sheets.filter((s) => s.id !== edit.sheetId) } : wb;
     case 'renameBook':
       return edit.name.trim() ? { ...wb, name: edit.name.trim() } : wb;
+    case 'layout':
+      return updateSheet(wb, edit.sheetId, (s) => ({ ...s, layout: { ...s.layout, ...edit.patch } }));
+    case 'merge': {
+      const { rect } = edit;
+      if (rect.r0 === rect.r1 && rect.c0 === rect.c1) return wb;
+      return updateSheet(wb, edit.sheetId, (s) => {
+        // Like Excel, only the top-left value survives a merge.
+        let cells = s.cells;
+        for (const key of rectKeys(rect)) {
+          if (key === toKey(rect.r0, rect.c0) || !cells[key]) continue;
+          cells = withCell(cells, key, { ...cells[key], raw: '' });
+        }
+        const merges = (s.layout?.merges ?? []).filter((m) => !overlaps(m, rect));
+        return { ...s, cells, layout: { ...s.layout, merges: [...merges, { ...rect }] } };
+      });
+    }
+    case 'unmerge':
+      return updateSheet(wb, edit.sheetId, (s) => ({
+        ...s,
+        layout: { ...s.layout, merges: (s.layout?.merges ?? []).filter((m) => !overlaps(m, edit.rect)) },
+      }));
   }
 }
 

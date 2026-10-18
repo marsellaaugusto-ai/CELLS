@@ -1,10 +1,10 @@
 import * as Y from 'yjs';
-import type { Cell, Sheet, Workbook } from '../model/types';
+import type { Cell, Sheet, SheetLayout, Workbook } from '../model/types';
 import { applyEdit, type Edit } from '../state/workbook';
 
 // A workbook lives in a Yjs document so several people can edit it at once:
-//   meta:   Y.Map  { id, name, updatedAt }
-//   sheets: Y.Array of Y.Map { id, name, rows, cols, cells: Y.Map<A1 key, Cell> }
+//   meta:   Y.Map  { id, name, updatedAt, names }
+//   sheets: Y.Array of Y.Map { id, name, rows, cols, layout, cells: Y.Map<A1 key, Cell> }
 // Each cell is replaced as a whole, so edits to different cells always merge and
 // simultaneous edits to the same cell end with one of them, the same on every screen.
 
@@ -19,6 +19,7 @@ function sheetToY(s: Sheet): YSheet {
   y.set('name', s.name);
   y.set('rows', s.rows);
   y.set('cols', s.cols);
+  if (s.layout) y.set('layout', s.layout);
   const cells = new Y.Map<Cell>();
   for (const [k, c] of Object.entries(s.cells)) cells.set(k, c);
   y.set('cells', cells);
@@ -26,23 +27,29 @@ function sheetToY(s: Sheet): YSheet {
 }
 
 function sheetFromY(y: YSheet): Sheet {
-  return {
+  const sheet: Sheet = {
     id: y.get('id') as string,
     name: y.get('name') as string,
     rows: y.get('rows') as number,
     cols: y.get('cols') as number,
     cells: (y.get('cells') as Y.Map<Cell>).toJSON() as Record<string, Cell>,
   };
+  const layout = y.get('layout') as SheetLayout | undefined;
+  if (layout) sheet.layout = layout;
+  return sheet;
 }
 
 export function workbookFromDoc(doc: Y.Doc): Workbook {
-  const meta = doc.getMap<string>('meta');
-  return {
-    id: meta.get('id') ?? '',
-    name: meta.get('name') ?? '',
-    updatedAt: meta.get('updatedAt') ?? '',
+  const meta = doc.getMap<unknown>('meta');
+  const wb: Workbook = {
+    id: (meta.get('id') as string) ?? '',
+    name: (meta.get('name') as string) ?? '',
+    updatedAt: (meta.get('updatedAt') as string) ?? '',
     sheets: doc.getArray<YSheet>('sheets').toArray().map(sheetFromY),
   };
+  const names = meta.get('names') as Workbook['names'];
+  if (names) wb.names = names;
+  return wb;
 }
 
 /**
@@ -54,10 +61,11 @@ export function docStateFromWorkbook(wb: Workbook): Uint8Array {
   const doc = new Y.Doc();
   doc.clientID = 0;
   doc.transact(() => {
-    const meta = doc.getMap<string>('meta');
+    const meta = doc.getMap<unknown>('meta');
     meta.set('id', wb.id);
     meta.set('name', wb.name);
     meta.set('updatedAt', wb.updatedAt);
+    if (wb.names) meta.set('names', wb.names);
     doc.getArray<YSheet>('sheets').push(wb.sheets.map(sheetToY));
   });
   const state = Y.encodeStateAsUpdate(doc);
@@ -67,8 +75,9 @@ export function docStateFromWorkbook(wb: Workbook): Uint8Array {
 
 /** Writes into the document only what differs between two snapshots. */
 function writeDiff(doc: Y.Doc, before: Workbook, after: Workbook) {
-  const meta = doc.getMap<string>('meta');
+  const meta = doc.getMap<unknown>('meta');
   if (before.name !== after.name) meta.set('name', after.name);
+  if (before.names !== after.names) meta.set('names', after.names ?? null);
 
   const ySheets = doc.getArray<YSheet>('sheets');
   const keep = new Set(after.sheets.map((s) => s.id));
@@ -87,6 +96,7 @@ function writeDiff(doc: Y.Doc, before: Workbook, after: Workbook) {
     if (b.name !== s.name) y.set('name', s.name);
     if (b.rows !== s.rows) y.set('rows', Math.max(s.rows, y.get('rows') as number));
     if (b.cols !== s.cols) y.set('cols', Math.max(s.cols, y.get('cols') as number));
+    if (b.layout !== s.layout) y.set('layout', s.layout ?? null);
     if (b.cells === s.cells) continue;
     const yCells = y.get('cells') as Y.Map<Cell>;
     for (const k of new Set([...Object.keys(b.cells), ...Object.keys(s.cells)])) {
@@ -137,7 +147,7 @@ export class Book {
     if (after === before) return;
     this.doc.transact(() => {
       writeDiff(this.doc, before, after);
-      this.doc.getMap<string>('meta').set('updatedAt', new Date().toISOString());
+      this.doc.getMap<unknown>('meta').set('updatedAt', new Date().toISOString());
     }, this);
   }
 

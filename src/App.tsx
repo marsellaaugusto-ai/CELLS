@@ -6,6 +6,8 @@ import type { WorkbookSummary } from './model/types';
 import { isError, newWorkbook } from './model/types';
 import { evaluateWorkbook } from './engine/evaluate';
 import { rectToTsv, usedRect, type Edit } from './state/workbook';
+import type { ImportReport } from './io/xlsx';
+import { parseCsv } from './model/csv';
 import { Book, fromBase64 } from './collab/book';
 import { makeMe, type Peer } from './collab/presence';
 import { connect } from './collab/provider';
@@ -177,8 +179,49 @@ export default function App() {
     if (isOwner && supabase) listMembers(supabase, wb.id).then(setMembers).catch(() => setMembers([]));
   }, [isOwner, wb.id]);
 
-  const computed = useMemo(() => evaluateWorkbook(wb), [wb, recalcTick]);
-  const values = computed[sheet.id] ?? {};
+  const evaluation = useMemo(() => evaluateWorkbook(wb), [wb, recalcTick]);
+  const values = evaluation.values[sheet.id] ?? {};
+  const approx = useMemo(() => {
+    const prefix = `${sheet.id}!`;
+    return new Set([...evaluation.approx].filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length)));
+  }, [evaluation, sheet.id]);
+  const [report, setReport] = useState<ImportReport | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const openFile = async (file: File) => {
+    setBusy(`Abriendo ${file.name}…`);
+    try {
+      if (/\.(xlsx|xlsm)$/i.test(file.name)) {
+        const { readXlsx } = await import('./io/xlsx');
+        const result = await readXlsx(await file.arrayBuffer(), file.name);
+        await open({ wb: result.wb });
+        setReport(result.report);
+      } else {
+        const next = newWorkbook(file.name.replace(/\.[^.]+$/, ''));
+        const rows = parseCsv(await file.text());
+        next.sheets[0].rows = Math.max(100, rows.length + 20);
+        rows.forEach((row, r) => row.forEach((raw, c) => raw && (next.sheets[0].cells[toKey(r, c)] = { raw })));
+        await open({ wb: next });
+        setReport(null);
+      }
+      refreshBooks();
+    } catch (e) {
+      alert(`No se pudo abrir ${file.name}: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const exportXlsx = async () => {
+    setBusy('Preparando el .xlsx…');
+    try {
+      const { writeXlsx } = await import('./io/xlsx');
+      const data = await writeXlsx(wb, evaluation.values);
+      download(`${wb.name}.xlsx`, data, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    } finally {
+      setBusy(null);
+    }
+  };
   const rect = rectOf(sel.anchor, sel.focus);
   const activeKey = toKey(sel.focus.r, sel.focus.c);
   const activeRaw = sheet.cells[activeKey]?.raw ?? '';
@@ -210,6 +253,8 @@ export default function App() {
       edit({ type: 'format', sheetId: sheet.id, rect, patch: { bold } });
     },
     addRows: () => edit({ type: 'addRows', sheetId: sheet.id, count: 50 }),
+    resizeColumn: (c, px) =>
+      edit({ type: 'layout', sheetId: sheet.id, patch: { colWidths: { ...sheet.layout?.colWidths, [c]: px } } }),
   };
 
   const onCopy = (cut: boolean) => {
@@ -275,6 +320,11 @@ export default function App() {
       }
     },
     exportCsv,
+    openFile,
+    exportXlsx,
+    report,
+    clearReport: () => setReport(null),
+    busy,
     exportJson: () => download(`${wb.name}.cells.json`, JSON.stringify(wb, null, 2), 'application/json'),
     storeKind: store.kind,
     cloudConfigured: !!supabase,
@@ -373,6 +423,7 @@ export default function App() {
             editing={editing}
             show={show}
             actions={actions}
+            approx={approx}
             peers={peerMarks}
             onCopy={onCopy}
             onPaste={onPaste}
