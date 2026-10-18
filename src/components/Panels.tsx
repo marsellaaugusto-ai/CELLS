@@ -4,6 +4,8 @@ import type { CellFormat, NumFmt, Sheet, Tint, Value, Workbook, WorkbookSummary 
 import { isError } from '../model/types';
 import { parseCsv } from '../model/csv';
 import type { Edit } from '../state/workbook';
+import type { Peer } from '../collab/presence';
+import type { CollabState } from '../App';
 import { supabaseUrl } from '../storage/cloud';
 import { Card, PlayIcon, Toggle } from './ui';
 
@@ -37,6 +39,13 @@ export interface PanelProps {
   userEmail: string | null;
   signIn(email: string): Promise<string>;
   signOut(): void;
+  me: Peer;
+  peers: Peer[];
+  collab: CollabState;
+  isOwner: boolean;
+  members: string[];
+  invite(email: string): Promise<void>;
+  uninvite(email: string): Promise<void>;
 }
 
 export function ArchivoPanel(p: PanelProps) {
@@ -290,14 +299,71 @@ export function GraficosPanel(p: PanelProps) {
 export function ConectarPanel(p: PanelProps) {
   const [email, setEmail] = useState('');
   const [msg, setMsg] = useState('');
+  const [invitee, setInvitee] = useState('');
+  const [inviteMsg, setInviteMsg] = useState('');
   const endpoint = `${supabaseUrl}/rest/v1/workbooks?id=eq.${p.wb.id}&select=data`;
   return (
     <>
+      <Card title="Edición en vivo">
+        {p.collab === 'cloud' && <p className="ok">Conectado. Todo lo que escriban las personas invitadas aparece al instante.</p>}
+        {p.collab === 'tabs' && (
+          <p>
+            Activa entre pestañas de este navegador: abrí este libro en otra pestaña para probarlo. Para editar con otras
+            personas, guardá en la nube.
+          </p>
+        )}
+        {p.collab === 'offline' && <p className="bad">No se pudo conectar a la edición en vivo. Tus cambios se siguen guardando.</p>}
+        <div className="list">
+          <div className="list-item">
+            <span className="dot" style={{ background: p.me.color }} />
+            <span style={{ fontSize: 13 }}>{p.me.name} (vos)</span>
+          </div>
+          {p.peers.map((peer) => (
+            <div key={peer.id} className="list-item">
+              <span className="dot" style={{ background: peer.color }} />
+              <span style={{ fontSize: 13 }}>{peer.name}</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+      {p.isOwner && (
+        <Card title="Compartir este libro">
+          <form
+            className="row"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              try {
+                await p.invite(invitee);
+                setInviteMsg(`${invitee} ya puede abrirlo entrando con ese email.`);
+                setInvitee('');
+              } catch {
+                setInviteMsg('No se pudo invitar. Probá de nuevo.');
+              }
+            }}
+          >
+            <input className="field" type="email" required placeholder="email de la persona" aria-label="Email a invitar" value={invitee} onChange={(e) => setInvitee(e.target.value)} />
+            <button type="submit" className="btn-primary" style={{ width: '100%' }}>
+              Invitar a editar
+            </button>
+          </form>
+          {inviteMsg && <p>{inviteMsg}</p>}
+          <div className="list">
+            {p.members.map((m) => (
+              <div key={m} className="list-item">
+                <span style={{ flex: 1, fontSize: 13 }}>{m}</span>
+                <button type="button" className="icon-btn" aria-label={`Quitar a ${m}`} onClick={() => p.uninvite(m)}>
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
       <Card title="Dónde se guarda">
         {p.storeKind === 'cloud' ? (
           <p className="ok">En la nube, con tu cuenta {p.userEmail}. Se sincroniza entre dispositivos.</p>
         ) : (
-          <p>En este navegador. Para guardar en la nube y sincronizar, {p.cloudConfigured ? 'entrá con tu email.' : 'configurá Supabase (ver README).'}</p>
+          <p>En este navegador. Para guardar en la nube y compartir, {p.cloudConfigured ? 'entrá con tu email.' : 'configurá Supabase (ver README).'}</p>
         )}
         {p.cloudConfigured && !p.userEmail && (
           <form
@@ -330,8 +396,8 @@ export function ConectarPanel(p: PanelProps) {
               Copiar dirección
             </button>
             <p>
-              Otras apps (n8n, Make, Zapier o tu propio código) leen y escriben este libro con esa dirección, la clave pública de
-              Supabase y un usuario con acceso. Los cambios llegan en vivo.
+              Otras apps (n8n, Make, Zapier o tu propio código) leen este libro con esa dirección, la clave pública de Supabase y
+              un usuario con acceso.
             </p>
           </>
         ) : (

@@ -282,3 +282,14 @@ button { cursor: pointer; }
 .bar.neg { background: var(--red); }
 .bar-label { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .empty { padding: 24px; color: var(--muted); font-size: 13px; }
+
+/* ---------- people ---------- */
+.people { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; padding: 0; list-style: none; font-weight: 500; }
+.people li { display: flex; align-items: center; gap: 6px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.peer-tag {
+  position: absolute; top: 0; right: 0; max-width: 70%;
+  padding: 0 5px; border-radius: 0 6px 0 5px;
+  font-size: 9px; font-weight: 600; line-height: 12px; color: #0b1219;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none;
+}

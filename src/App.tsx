@@ -1,14 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { rectOf, rectLabel, toKey } from './model/address';
 import { download, parseDelimited, toCsv } from './model/csv';
 import { sampleWorkbook } from './model/sample';
-import type { Workbook, WorkbookSummary } from './model/types';
+import type { WorkbookSummary } from './model/types';
 import { isError, newWorkbook } from './model/types';
 import { evaluateWorkbook } from './engine/evaluate';
-import { rectToTsv, usedRect, useWorkbook } from './state/workbook';
+import { rectToTsv, usedRect, type Edit } from './state/workbook';
+import { Book, fromBase64 } from './collab/book';
+import { makeMe, type Peer } from './collab/presence';
+import { connect } from './collab/provider';
+import { cloudTransport, tabTransport } from './collab/transport';
 import { localStore } from './storage/local';
-import { cloudStore, supabase } from './storage/cloud';
-import type { Store } from './storage/store';
+import { addMember, cloudStore, listMembers, removeMember, supabase } from './storage/cloud';
+import type { Store, StoredBook } from './storage/store';
 import { Chart } from './components/Chart';
 import { Grid, type GridActions, type Selection } from './components/Grid';
 import {
@@ -21,9 +25,10 @@ import {
   type PanelProps,
   type ShowOptions,
 } from './components/Panels';
-import { MODES, ModeHead, Rail, type ModeId } from './components/ui';
+import { MODES, ModeHead, People, Rail, type ModeId } from './components/ui';
 
 type SaveState = 'saved' | 'saving' | 'error';
+export type CollabState = 'tabs' | 'cloud' | 'offline';
 
 const PANELS = {
   archivo: ArchivoPanel,
@@ -34,8 +39,11 @@ const PANELS = {
   conectar: ConectarPanel,
 };
 
+const bookFrom = (stored: StoredBook) => (stored.state ? new Book(fromBase64(stored.state)) : Book.fromWorkbook(stored.wb));
+
 export default function App() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
   const [authChecked, setAuthChecked] = useState(!supabase);
   const store: Store = useMemo(() => (supabase && userEmail ? cloudStore(supabase) : localStore), [userEmail]);
 
@@ -43,13 +51,21 @@ export default function App() {
     if (!supabase) return;
     supabase.auth.getSession().then(({ data }) => {
       setUserEmail(data.session?.user.email ?? null);
+      setUserId(data.session?.user.id ?? null);
       setAuthChecked(true);
     });
-    const { data } = supabase.auth.onAuthStateChange((_e, session) => setUserEmail(session?.user.email ?? null));
+    const { data } = supabase.auth.onAuthStateChange((_e, session) => {
+      setUserEmail(session?.user.email ?? null);
+      setUserId(session?.user.id ?? null);
+    });
     return () => data.subscription.unsubscribe();
   }, []);
 
-  const { wb, edit, load, undo, redo } = useWorkbook(newWorkbook());
+  const [book, setBook] = useState(() => Book.fromWorkbook(newWorkbook()));
+  const wb = useSyncExternalStore(book.subscribe, () => book.snapshot);
+  const edit = useCallback((e: Edit) => book.edit(e), [book]);
+  const [owner, setOwner] = useState<string | undefined>();
+
   const [sheetId, setSheetId] = useState(wb.sheets[0].id);
   const sheet = wb.sheets.find((s) => s.id === sheetId) ?? wb.sheets[0];
   const [sel, setSel] = useState<Selection>({ anchor: { r: 0, c: 0 }, focus: { r: 0, c: 0 } });
@@ -63,21 +79,21 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [books, setBooks] = useState<WorkbookSummary[]>([]);
   const [saveState, setSaveState] = useState<SaveState>('saved');
-  const loadedRef = useRef<Workbook | null>(null);
-  const wbRef = useRef(wb);
-  wbRef.current = wb;
 
   const refreshBooks = useCallback(() => store.list().then(setBooks).catch(() => setBooks([])), [store]);
 
   const open = useCallback(
-    (next: Workbook) => {
-      loadedRef.current = next;
-      load(next);
-      setSheetId(next.sheets[0].id);
+    async (stored: StoredBook) => {
+      const next = bookFrom(stored);
+      // A workbook from before collaboration gets its shared document saved right away.
+      if (!stored.state) await store.save(next).catch(() => setSaveState('error'));
+      setBook(next);
+      setOwner(stored.owner);
+      setSheetId(next.snapshot.sheets[0].id);
       setSel({ anchor: { r: 0, c: 0 }, focus: { r: 0, c: 0 } });
       setEditing(null);
     },
-    [load],
+    [store],
   );
 
   // Boot (and re-boot when signing in/out): open the most recent workbook, or create the example.
@@ -87,13 +103,9 @@ export default function App() {
     (async () => {
       const list = await store.list().catch(() => []);
       if (cancelled) return;
-      let first = list[0] ? await store.load(list[0].id).catch(() => null) : null;
-      if (!first) {
-        first = sampleWorkbook();
-        await store.save(first).catch(() => setSaveState('error'));
-      }
+      const first = (list[0] && (await store.load(list[0].id).catch(() => null))) || { wb: sampleWorkbook() };
       if (cancelled) return;
-      open(first);
+      await open(first);
       setReady(true);
       refreshBooks();
     })();
@@ -102,32 +114,68 @@ export default function App() {
     };
   }, [store, authChecked, open, refreshBooks]);
 
-  // Autosave shortly after each change.
+  // Autosave shortly after each change made here. Changes from others are saved by whoever made them.
   useEffect(() => {
-    if (!ready || wb === loadedRef.current) return;
-    setSaveState('saving');
-    const t = setTimeout(() => {
+    if (!ready) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const save = () => {
+      timer = undefined;
       store
-        .save(wb)
+        .save(book)
         .then(() => {
           setSaveState('saved');
           refreshBooks();
         })
         .catch(() => setSaveState('error'));
-    }, 600);
-    return () => clearTimeout(t);
-  }, [wb, ready, store, refreshBooks]);
+    };
+    const onUpdate = (_u: Uint8Array, origin: unknown) => {
+      if (!book.isLocal(origin)) return;
+      setSaveState('saving');
+      clearTimeout(timer);
+      timer = setTimeout(save, 600);
+    };
+    book.doc.on('update', onUpdate);
+    return () => {
+      book.doc.off('update', onUpdate);
+      if (timer) {
+        clearTimeout(timer);
+        save(); // don't lose the last edit when switching workbooks
+      }
+    };
+  }, [book, ready, store, refreshBooks]);
 
-  // Live updates when another tab, device or app saves this workbook.
+  // Live collaboration: other tabs of this browser, or (with the cloud) everyone invited.
+  const me = useMemo(() => makeMe(userEmail), [userEmail]);
+  const [peers, setPeers] = useState<Peer[]>([]);
+  const [collab, setCollab] = useState<CollabState>('tabs');
+  const providerRef = useRef<ReturnType<typeof connect> | null>(null);
+
   useEffect(() => {
     if (!ready) return;
-    return store.subscribe(wb.id, (remote) => {
-      if (remote.updatedAt > wbRef.current.updatedAt) {
-        loadedRef.current = remote;
-        load(remote);
-      }
-    });
-  }, [store, wb.id, ready, load]);
+    const id = book.snapshot.id;
+    const transport = store.kind === 'cloud' && supabase ? cloudTransport(supabase, id, me.id) : tabTransport(id);
+    setCollab(store.kind === 'cloud' ? 'cloud' : 'tabs');
+    transport.ready.catch(() => setCollab('offline'));
+    const provider = connect(book, transport, me, setPeers);
+    providerRef.current = provider;
+    return () => {
+      provider.close();
+      providerRef.current = null;
+      setPeers([]);
+    };
+  }, [book, ready, store, me]);
+
+  useEffect(() => {
+    providerRef.current?.moveCursor({ sheetId: sheet.id, r: sel.focus.r, c: sel.focus.c });
+  }, [sheet.id, sel.focus.r, sel.focus.c, book, ready, me]);
+
+  // Who can edit this workbook (cloud only; the owner manages the list).
+  const isOwner = store.kind === 'cloud' && !!userId && owner === userId;
+  const [members, setMembers] = useState<string[]>([]);
+  useEffect(() => {
+    setMembers([]);
+    if (isOwner && supabase) listMembers(supabase, wb.id).then(setMembers).catch(() => setMembers([]));
+  }, [isOwner, wb.id]);
 
   const computed = useMemo(() => evaluateWorkbook(wb), [wb, recalcTick]);
   const values = computed[sheet.id] ?? {};
@@ -155,8 +203,8 @@ export default function App() {
     },
     cancelEdit: () => setEditing(null),
     clear: () => edit({ type: 'clear', sheetId: sheet.id, rect }),
-    undo,
-    redo,
+    undo: () => book.undo(),
+    redo: () => book.redo(),
     toggleBold: () => {
       const bold = !sheet.cells[activeKey]?.fmt?.bold;
       edit({ type: 'format', sheetId: sheet.id, rect, patch: { bold } });
@@ -211,12 +259,10 @@ export default function App() {
     books,
     openBook: async (id) => {
       const next = await store.load(id).catch(() => null);
-      if (next) open(next);
+      if (next) await open(next);
     },
     newBook: async () => {
-      const next = newWorkbook();
-      await store.save(next).catch(() => setSaveState('error'));
-      open(next);
+      await open({ wb: newWorkbook() });
       refreshBooks();
     },
     deleteBook: async (id) => {
@@ -224,9 +270,7 @@ export default function App() {
       const list = await store.list().catch(() => []);
       setBooks(list);
       if (id === wb.id) {
-        const next = (list[0] && (await store.load(list[0].id).catch(() => null))) || newWorkbook();
-        if (!list[0]) await store.save(next).catch(() => setSaveState('error'));
-        open(next);
+        await open((list[0] && (await store.load(list[0].id).catch(() => null))) || { wb: newWorkbook() });
         refreshBooks();
       }
     },
@@ -237,7 +281,26 @@ export default function App() {
     userEmail,
     signIn,
     signOut: () => void supabase?.auth.signOut(),
+    me,
+    peers,
+    collab,
+    isOwner,
+    members,
+    invite: async (email) => {
+      if (!supabase) return;
+      await addMember(supabase, wb.id, email);
+      setMembers(await listMembers(supabase, wb.id));
+    },
+    uninvite: async (email) => {
+      if (!supabase) return;
+      await removeMember(supabase, wb.id, email);
+      setMembers(await listMembers(supabase, wb.id));
+    },
   };
+
+  const peerMarks = peers.flatMap((p) =>
+    p.at && p.at.sheetId === sheet.id ? [{ key: toKey(p.at.r, p.at.c), name: p.name, color: p.color }] : [],
+  );
 
   const modeIndex = MODES.findIndex((m) => m.id === mode);
   const m = MODES[modeIndex];
@@ -301,7 +364,7 @@ export default function App() {
             <span>
               {wb.name} · {sheet.name}
             </span>
-            <span>{ready ? '' : 'Cargando…'}</span>
+            {ready ? <People me={me} peers={peers} /> : <span>Cargando…</span>}
           </div>
           <Grid
             sheet={sheet}
@@ -310,6 +373,7 @@ export default function App() {
             editing={editing}
             show={show}
             actions={actions}
+            peers={peerMarks}
             onCopy={onCopy}
             onPaste={onPaste}
           />

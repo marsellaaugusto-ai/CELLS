@@ -28,17 +28,20 @@ interface Props {
   editing: { initial: string } | null;
   show: { colHeads: boolean; rowHeads: boolean; formulas: boolean };
   actions: GridActions;
+  /** Cells where other people have their cursor. */
+  peers: { key: string; name: string; color: string }[];
   onCopy(cut: boolean): string;
   onPaste(text: string): void;
 }
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 
-export function Grid({ sheet, values, sel, editing, show, actions, onCopy, onPaste }: Props) {
+export function Grid({ sheet, values, sel, editing, show, actions, peers, onCopy, onPaste }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   const rect = rectOf(sel.anchor, sel.focus);
   const { r: ar, c: ac } = sel.focus;
+  const peerAt = new Map(peers.map((p) => [p.key, p]));
 
   useEffect(() => {
     const up = () => (dragging.current = false);
@@ -147,6 +150,7 @@ export function Grid({ sheet, values, sel, editing, show, actions, onCopy, onPas
               if (inRect(rect, r, c) && !(rect.r0 === rect.r1 && rect.c0 === rect.c1)) cls.push('in-sel');
               if (active) cls.push('active');
               const align = alignFor(v, fmt);
+              const peer = peerAt.get(key);
               return (
                 <div
                   key={c}
@@ -158,6 +162,7 @@ export function Grid({ sheet, values, sel, editing, show, actions, onCopy, onPas
                     justifyContent: align === 'right' ? 'flex-end' : align === 'center' ? 'center' : 'flex-start',
                     fontWeight: fmt?.bold ? 700 : undefined,
                     fontStyle: fmt?.italic ? 'italic' : undefined,
+                    boxShadow: peer && !active ? `inset 0 0 0 2px ${peer.color}` : undefined,
                   }}
                   title={isError(v) ? errorHelp(v.error) : undefined}
                   onMouseDown={(e) => {
@@ -175,6 +180,11 @@ export function Grid({ sheet, values, sel, editing, show, actions, onCopy, onPas
                     <CellEditor initial={editing.initial} actions={actions} />
                   ) : (
                     text
+                  )}
+                  {peer && (
+                    <span className="peer-tag" style={{ background: peer.color }}>
+                      {peer.name}
+                    </span>
                   )}
                 </div>
               );

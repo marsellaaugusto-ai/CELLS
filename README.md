@@ -12,7 +12,9 @@ Hoja de cálculo online, con fórmulas en español y sincronización con otras a
 - Gráfico de barras de la selección.
 - Importar y exportar CSV, exportar JSON.
 - Guardado automático: en el navegador, o en la nube con login por email si configurás Supabase.
-- En la nube: sincronización en vivo entre dispositivos y una API REST para conectar otras apps.
+- **Edición en vivo**: varias personas en el mismo libro a la vez, viendo el cursor de cada una.
+  Los cambios simultáneos se combinan sin pisarse y cada uno deshace solo lo suyo.
+- En la nube: compartir por email y una API REST para que otras apps lean los libros.
 
 ## Correrlo en tu computadora
 
@@ -33,6 +35,18 @@ npm run build      # genera la versión publicable en dist/
 
 Sin estas variables, Cells funciona igual y guarda en el navegador.
 
+## Edición en vivo
+
+Usa [Yjs](https://github.com/yjs/yjs): cada libro es un documento compartido donde los cambios de
+distintas personas se combinan solos.
+
+- **Sin nube**: funciona entre pestañas del mismo navegador. Abrí la app en dos pestañas para probarlo.
+- **Con nube**: entre personas y dispositivos, por Supabase Realtime. El dueño de un libro invita gente
+  desde **Conectar → Compartir este libro**; la persona invitada entra con ese email y lo ve en su lista.
+  Solo quien tiene acceso puede entrar al canal en vivo del libro.
+
+Si ya habías ejecutado `supabase/schema.sql` antes, ejecutalo de nuevo: agrega lo necesario sin borrar datos.
+
 ## Publicarlo en internet (gratis)
 
 El repositorio es privado, así que GitHub Pages no sirve en el plan gratuito. Usá Vercel, Netlify o Cloudflare Pages:
@@ -51,15 +65,16 @@ Con la nube activada, cada libro tiene una dirección REST (la ves en **Conectar
 GET  {SUPABASE_URL}/rest/v1/workbooks?id=eq.{ID}&select=data
 ```
 
-Desde n8n, Make, Zapier o tu propio código se lee y escribe con la clave pública de Supabase
-y el token de un usuario con acceso. Las apps abiertas reciben los cambios en vivo.
+Desde n8n, Make, Zapier o tu propio código se lee con la clave pública de Supabase y el token de un
+usuario con acceso. Por ahora la API es de lectura: escribir celdas desde otras apps llega en una próxima versión.
 
 ## Estructura
 
 | Carpeta | Contenido |
 |---|---|
 | `src/engine` | Motor de fórmulas, traducción del español y formato de números |
-| `src/state` | Cambios al libro y deshacer/rehacer |
+| `src/state` | Cambios al libro (insertar, formatear, ordenar, pegar…) |
+| `src/collab` | Documento compartido, deshacer por persona, presencia y conexión en vivo |
 | `src/storage` | Guardado en el navegador o en Supabase |
 | `src/components` | Interfaz: menú lateral, paneles, cuadrícula y gráfico |
 | `supabase/schema.sql` | Tabla y permisos de la base de datos |

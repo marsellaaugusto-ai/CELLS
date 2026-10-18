@@ -1,8 +1,10 @@
-import type { Workbook, WorkbookSummary } from '../model/types';
-import type { Store } from './store';
+import type { WorkbookSummary } from '../model/types';
+import { toBase64 } from '../collab/book';
+import type { Store, StoredBook } from './store';
 
 const INDEX = 'cells:index';
 const wbKey = (id: string) => `cells:wb:${id}`;
+const stateKey = (id: string) => `cells:y:${id}`;
 
 function readIndex(): WorkbookSummary[] {
   try {
@@ -16,7 +18,7 @@ function writeIndex(list: WorkbookSummary[]) {
   localStorage.setItem(INDEX, JSON.stringify(list));
 }
 
-/** Saves in this browser only. Other tabs of the same browser stay in sync. */
+/** Saves in this browser only. Open tabs stay in sync through the tab transport. */
 export const localStore: Store = {
   kind: 'local',
 
@@ -26,11 +28,14 @@ export const localStore: Store = {
 
   async load(id) {
     const raw = localStorage.getItem(wbKey(id));
-    return raw ? (JSON.parse(raw) as Workbook) : null;
+    if (!raw) return null;
+    return { wb: JSON.parse(raw), state: localStorage.getItem(stateKey(id)) ?? undefined } satisfies StoredBook;
   },
 
-  async save(wb) {
+  async save(book) {
+    const wb = book.snapshot;
     localStorage.setItem(wbKey(wb.id), JSON.stringify(wb));
+    localStorage.setItem(stateKey(wb.id), toBase64(book.encode()));
     const list = readIndex().filter((w) => w.id !== wb.id);
     list.push({ id: wb.id, name: wb.name, updatedAt: wb.updatedAt });
     writeIndex(list);
@@ -38,14 +43,7 @@ export const localStore: Store = {
 
   async remove(id) {
     localStorage.removeItem(wbKey(id));
+    localStorage.removeItem(stateKey(id));
     writeIndex(readIndex().filter((w) => w.id !== id));
-  },
-
-  subscribe(id, onChange) {
-    const handler = (e: StorageEvent) => {
-      if (e.key === wbKey(id) && e.newValue) onChange(JSON.parse(e.newValue));
-    };
-    window.addEventListener('storage', handler);
-    return () => window.removeEventListener('storage', handler);
   },
 };

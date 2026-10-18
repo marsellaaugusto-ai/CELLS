@@ -1,4 +1,3 @@
-import { useCallback, useReducer } from 'react';
 import { parseKey, rectKeys, toKey, type Rect } from '../model/address';
 import type { Cell, CellFormat, Sheet, Workbook } from '../model/types';
 import { newSheet } from '../model/types';
@@ -14,20 +13,6 @@ export type Edit =
   | { type: 'renameSheet'; sheetId: string; name: string }
   | { type: 'deleteSheet'; sheetId: string }
   | { type: 'renameBook'; name: string };
-
-type Action =
-  | { type: 'edit'; edit: Edit }
-  | { type: 'load'; wb: Workbook }
-  | { type: 'undo' }
-  | { type: 'redo' };
-
-interface History {
-  past: Workbook[];
-  present: Workbook;
-  future: Workbook[];
-}
-
-const MAX_UNDO = 100;
 
 function withCell(cells: Record<string, Cell>, key: string, cell: Cell | undefined) {
   const next = { ...cells };
@@ -126,42 +111,6 @@ export function applyEdit(wb: Workbook, edit: Edit): Workbook {
     case 'renameBook':
       return edit.name.trim() ? { ...wb, name: edit.name.trim() } : wb;
   }
-}
-
-function reducer(h: History, a: Action): History {
-  switch (a.type) {
-    case 'load':
-      return { past: [], present: a.wb, future: [] };
-    case 'edit': {
-      const next = applyEdit(h.present, a.edit);
-      if (next === h.present) return h;
-      next.updatedAt = new Date().toISOString();
-      return { past: [...h.past.slice(-MAX_UNDO + 1), h.present], present: next, future: [] };
-    }
-    case 'undo': {
-      const prev = h.past[h.past.length - 1];
-      if (!prev) return h;
-      return { past: h.past.slice(0, -1), present: { ...prev, updatedAt: new Date().toISOString() }, future: [h.present, ...h.future] };
-    }
-    case 'redo': {
-      const [next, ...rest] = h.future;
-      if (!next) return h;
-      return { past: [...h.past, h.present], present: { ...next, updatedAt: new Date().toISOString() }, future: rest };
-    }
-  }
-}
-
-export function useWorkbook(initial: Workbook) {
-  const [h, dispatch] = useReducer(reducer, { past: [], present: initial, future: [] });
-  return {
-    wb: h.present,
-    canUndo: h.past.length > 0,
-    canRedo: h.future.length > 0,
-    edit: useCallback((edit: Edit) => dispatch({ type: 'edit', edit }), []),
-    load: useCallback((wb: Workbook) => dispatch({ type: 'load', wb }), []),
-    undo: useCallback(() => dispatch({ type: 'undo' }), []),
-    redo: useCallback(() => dispatch({ type: 'redo' }), []),
-  };
 }
 
 /** Raw text of a block of cells, tab-separated like Excel and Google Sheets put on the clipboard. */

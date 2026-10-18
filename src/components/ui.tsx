@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { Peer } from '../collab/presence';
 
 export type ModeId = 'archivo' | 'datos' | 'formato' | 'formulas' | 'graficos' | 'conectar';
 
@@ -87,5 +88,23 @@ export function PlayIcon() {
     <svg width="10" height="12" viewBox="0 0 10 12" aria-hidden="true">
       <path d="M1 1 L9 6 L1 11 Z" fill="currentColor" />
     </svg>
+  );
+}
+
+/** Who has this workbook open right now, for the sheet's header strip. */
+export function People({ me, peers }: { me: Peer; peers: Peer[] }) {
+  return (
+    <ul className="people" aria-label="Personas en este libro">
+      <li>
+        <span className="dot" style={{ background: me.color }} />
+        Vos
+      </li>
+      {peers.map((p) => (
+        <li key={p.id}>
+          <span className="dot" style={{ background: p.color }} />
+          {p.name}
+        </li>
+      ))}
+    </ul>
   );
 }
