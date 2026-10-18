@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import type { BorderSide, CellFormat, Value } from '../model/types';
+import type { BorderSide, CellFormat, RichRun, Value } from '../model/types';
 import { alignFor, codeColor } from '../engine/format';
 
 // How a cell's format is drawn on Cells' dark tiles. The stored format is never changed:
@@ -23,11 +23,15 @@ export function contrast(a: string, b: string) {
 
 const readableOn = (bg: string) => (luminance(bg) > 0.4 ? '#1b232d' : '#ffffff');
 
-const BORDER_WIDTH = { hair: 1, thin: 1, medium: 2, thick: 3, double: 3, dashed: 1, dotted: 1 } as const;
+const BORDER_WIDTH: Record<BorderSide['style'], number> = {
+  hair: 1, thin: 1, medium: 2, thick: 3, double: 3, dashed: 1, dotted: 1,
+  mediumDashed: 2, dashDot: 1, mediumDashDot: 2, dashDotDot: 1, mediumDashDotDot: 2, slantDashDot: 2,
+};
 
 function borderCss(b: BorderSide | undefined, bg: string) {
   if (!b) return undefined;
-  const style = b.style === 'double' ? 'double' : b.style === 'dashed' ? 'dashed' : b.style === 'dotted' || b.style === 'hair' ? 'dotted' : 'solid';
+  // CSS has no dash-dot lines; those show as dashes (the stored style keeps Excel's exact one).
+  const style = b.style === 'double' ? 'double' : /dot/i.test(b.style) && !/dash/i.test(b.style) ? 'dotted' : b.style === 'hair' ? 'dotted' : /dash/i.test(b.style) ? 'dashed' : 'solid';
   const color = b.color && contrast(b.color, bg) >= 2 ? b.color : LINE;
   return `${BORDER_WIDTH[b.style]}px ${style} ${color}`;
 }
@@ -35,8 +39,9 @@ function borderCss(b: BorderSide | undefined, bg: string) {
 export function cellLook(v: Value, fmt: CellFormat | undefined): CSSProperties {
   const align = alignFor(v, fmt);
   const s: CSSProperties = {
-    justifyContent: align === 'right' ? 'flex-end' : align === 'center' ? 'center' : 'flex-start',
+    justifyContent: align === 'right' ? 'flex-end' : align === 'center' || align === 'centerContinuous' ? 'center' : 'flex-start',
   };
+  if (align === 'justify' || align === 'distributed') s.textAlign = 'justify';
   if (!fmt) return s;
   const bg = fmt.fill ?? TILE;
   if (fmt.fill) s.background = fmt.fill;
@@ -52,11 +57,11 @@ export function cellLook(v: Value, fmt: CellFormat | undefined): CSSProperties {
   if (deco) s.textDecoration = deco;
   if (fmt.fontSize) s.fontSize = `${Math.round((fmt.fontSize * 13) / 11)}px`;
   if (fmt.fontFamily) s.fontFamily = `'${fmt.fontFamily}', var(--sans)`;
-  if (fmt.valign) s.alignItems = fmt.valign === 'top' ? 'flex-start' : fmt.valign === 'bottom' ? 'flex-end' : 'center';
+  if (fmt.valign) s.alignItems = fmt.valign === 'bottom' ? 'flex-end' : fmt.valign === 'middle' ? 'center' : 'flex-start';
   if (fmt.wrap) {
     s.whiteSpace = 'normal';
     s.lineHeight = 1.25;
-    s.textAlign = align;
+    s.textAlign = align === 'right' ? 'right' : align === 'center' || align === 'centerContinuous' ? 'center' : align === 'justify' || align === 'distributed' ? 'justify' : 'left';
     s.paddingTop = 4;
     s.paddingBottom = 4;
   }
@@ -66,5 +71,22 @@ export function cellLook(v: Value, fmt: CellFormat | undefined): CSSProperties {
     s.borderBottom = borderCss(fmt.border.bottom, bg);
     s.borderLeft = borderCss(fmt.border.left, bg);
   }
+  return s;
+}
+
+/** One piece of a mixed-format text (m², a bold word…), readable on the cell's background. */
+export function richRunLook(run: RichRun, fmt: CellFormat | undefined): CSSProperties {
+  const s: CSSProperties = {};
+  const bg = fmt?.fill ?? TILE;
+  if (run.bold) s.fontWeight = 700;
+  if (run.italic) s.fontStyle = 'italic';
+  const deco = [run.underline && 'underline', run.strike && 'line-through'].filter(Boolean).join(' ');
+  if (deco) s.textDecoration = deco;
+  if (run.size) s.fontSize = `${Math.round((run.size * 13) / 11)}px`;
+  if (run.vertAlign) {
+    s.verticalAlign = run.vertAlign === 'superscript' ? 'super' : 'sub';
+    s.fontSize = '0.75em';
+  }
+  if (run.color && contrast(run.color, bg) >= 3) s.color = run.color;
   return s;
 }

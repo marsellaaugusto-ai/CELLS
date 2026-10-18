@@ -425,6 +425,7 @@ export default function App() {
             actions={actions}
             approx={approx}
             peers={peerMarks}
+            baseFont={wb.defaultFont}
             onCopy={onCopy}
             onPaste={onPaste}
           />

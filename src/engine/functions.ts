@@ -43,6 +43,106 @@ const scalar = (arg: Arg | undefined) => (arg ? (Array.isArray(arg.value) ? (arg
 
 const numbers = (args: Arg[]) => args.flatMap(flat).filter((v): v is number => typeof v === 'number');
 
+/**
+ * Numbers for MAX, MIN, AVERAGE-style functions, with Excel's rules: inside ranges only real
+ * numbers count (text, booleans and blanks are skipped); typed-in arguments are converted
+ * (TRUE → 1, "3" → 3); errors stop the calculation.
+ */
+function nums(args: Arg[], { textAsZero = false } = {}): number[] {
+  const out: number[] = [];
+  for (const a of args) {
+    if (!a || a.omitted) continue;
+    const fromRef = a.isRangeRef || a.isArray || (a as { isCellRef?: boolean }).isCellRef;
+    for (const v of flat(a)) {
+      if (isErr(v)) throw v;
+      if (typeof v === 'number') out.push(v);
+      else if (fromRef) {
+        if (textAsZero && typeof v === 'string') out.push(0);
+        else if (textAsZero && typeof v === 'boolean') out.push(v ? 1 : 0);
+      } else if (typeof v === 'boolean') out.push(v ? 1 : 0);
+      else if (typeof v === 'string') {
+        const n = Number(v.replace(',', '.'));
+        if (v.trim() === '' || isNaN(n)) throw new FormulaError('#VALUE!');
+        out.push(n);
+      }
+    }
+  }
+  return out;
+}
+
+const sorted = (xs: number[]) => [...xs].sort((a, b) => a - b);
+
+function kth(xs: number[], k: number, largest: boolean) {
+  const s = sorted(xs);
+  if (k < 1 || k > s.length || !Number.isFinite(k)) throw new FormulaError('#NUM!');
+  return largest ? s[s.length - Math.ceil(k)] : s[Math.ceil(k) - 1];
+}
+
+function percentileInc(xs: number[], p: number) {
+  if (!xs.length || p < 0 || p > 1) throw new FormulaError('#NUM!');
+  const s = sorted(xs);
+  const h = (s.length - 1) * p;
+  const lo = Math.floor(h);
+  return s[lo] + (h - lo) * ((s[lo + 1] ?? s[lo]) - s[lo]);
+}
+
+function percentileExc(xs: number[], p: number) {
+  const s = sorted(xs);
+  const h = (s.length + 1) * p - 1;
+  if (!s.length || h < 0 || h > s.length - 1) throw new FormulaError('#NUM!');
+  const lo = Math.floor(h);
+  return s[lo] + (h - lo) * ((s[lo + 1] ?? s[lo]) - s[lo]);
+}
+
+function mean(xs: number[]) {
+  if (!xs.length) throw new FormulaError('#DIV/0!');
+  return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+
+/** Values of the cells in the first range where every criteria pair matches (…IFS functions). */
+function ifsPick(target: Arg, pairs: Arg[]): unknown[] {
+  const vals = flat(target);
+  const mask = countIfs(pairs);
+  if (mask.length !== vals.length) throw new FormulaError('#VALUE!');
+  return vals.filter((_, i) => mask[i]);
+}
+
+const ifsNumbers = (target: Arg, pairs: Arg[]) => ifsPick(target, pairs).filter((v): v is number => typeof v === 'number');
+
+function pairStats(ys: Arg, xs: Arg) {
+  const a = flat(ys);
+  const b = flat(xs);
+  if (a.length !== b.length) throw new FormulaError('#N/A');
+  const pts = a.map((y, i) => [b[i], y]).filter((p): p is [number, number] => typeof p[0] === 'number' && typeof p[1] === 'number');
+  if (pts.length < 2) throw new FormulaError('#DIV/0!');
+  const mx = mean(pts.map((p) => p[0]));
+  const my = mean(pts.map((p) => p[1]));
+  let sxy = 0, sxx = 0, syy = 0;
+  for (const [x, y] of pts) {
+    sxy += (x - mx) * (y - my);
+    sxx += (x - mx) ** 2;
+    syy += (y - my) ** 2;
+  }
+  return { sxy, sxx, syy, mx, my };
+}
+
+/** Position for MATCH: 0 exact (wildcards allowed), 1 largest ≤ value, -1 smallest ≥ value. */
+function matchIndex(needle: unknown, list: unknown[], type: number): number {
+  if (type === 0) {
+    if (typeof needle === 'string') return list.findIndex((v) => matchesCriteria(v, `=${needle}`));
+    return list.findIndex((v) => v === needle);
+  }
+  let best = -1;
+  for (let i = 0; i < list.length; i++) {
+    const v = list[i];
+    if (typeof v !== typeof needle || v === null) continue;
+    const cmp = typeof v === 'string' ? v.localeCompare(needle as string, undefined, { sensitivity: 'base' }) : (v as number) - (needle as number);
+    if (type > 0 ? cmp <= 0 : cmp >= 0) best = i;
+    else break; // the list is expected sorted, as in Excel
+  }
+  return best;
+}
+
 /** Excel criteria: 5, ">5", "<>x", "=", "Ac*", "?ero"; text comparisons ignore case. */
 export function matchesCriteria(value: unknown, criteria: unknown): boolean {
   if (typeof criteria === 'number' || typeof criteria === 'boolean') return value === criteria;
@@ -123,7 +223,212 @@ function pmt(rate: number, n: number, pv: number, fv = 0, type = 0) {
   return (-(pv * f + fv) * rate) / ((1 + rate * type) * (f - 1));
 }
 
+/** Logical values for AND/OR: ranges contribute booleans and numbers, text is skipped, errors stop. */
+function logicals(args: Arg[]): boolean[] {
+  const out: boolean[] = [];
+  for (const a of args) {
+    if (!a || a.omitted) continue;
+    const fromRef = a.isRangeRef || a.isArray || (a as { isCellRef?: boolean }).isCellRef;
+    for (const v of flat(a)) {
+      if (isErr(v)) throw v;
+      if (typeof v === 'boolean') out.push(v);
+      else if (typeof v === 'number') out.push(v !== 0);
+      else if (typeof v === 'string' && !fromRef) {
+        const u = v.toUpperCase();
+        if (u === 'TRUE' || u === 'VERDADERO') out.push(true);
+        else if (u === 'FALSE' || u === 'FALSO') out.push(false);
+        else throw new FormulaError('#VALUE!');
+      }
+    }
+  }
+  if (!out.length) throw new FormulaError('#VALUE!');
+  return out;
+}
+
 export const EXTRA_FUNCTIONS: Record<string, (...args: Arg[]) => unknown> = {
+  // The engine's versions of these skip or garble errors inside ranges; Excel passes the error
+  // on (if one cell of a SUM range is #DIV/0!, the SUM is #DIV/0!).
+  SUM: (...args) => nums(args).reduce((a, b) => a + b, 0),
+  AVERAGE: (...args) => mean(nums(args)),
+  AVERAGEA: (...args) => mean(nums(args, { textAsZero: true })),
+  PRODUCT: (...args) => {
+    const xs = nums(args);
+    return xs.length ? xs.reduce((a, b) => a * b, 1) : 0;
+  },
+  SUMSQ: (...args) => nums(args).reduce((a, b) => a + b * b, 0),
+  SUMPRODUCT: (...arrays) => {
+    const lists = arrays.map((a) => flat(a));
+    const n = lists[0]?.length ?? 0;
+    if (lists.some((l) => l.length !== n)) throw new FormulaError('#VALUE!');
+    let total = 0;
+    for (let i = 0; i < n; i++) {
+      let prod = 1;
+      for (const l of lists) {
+        const v = l[i];
+        if (isErr(v)) throw v;
+        prod *= typeof v === 'number' ? v : 0;
+      }
+      total += prod;
+    }
+    return total;
+  },
+  AND: (...args) => logicals(args).every(Boolean),
+  OR: (...args) => logicals(args).some(Boolean),
+  // The engine declares these but leaves them empty; written here following Excel's documentation.
+  MAX: (...args) => {
+    const xs = nums(args);
+    return xs.length ? Math.max(...xs) : 0;
+  },
+  MIN: (...args) => {
+    const xs = nums(args);
+    return xs.length ? Math.min(...xs) : 0;
+  },
+  MAXA: (...args) => {
+    const xs = nums(args, { textAsZero: true });
+    return xs.length ? Math.max(...xs) : 0;
+  },
+  MINA: (...args) => {
+    const xs = nums(args, { textAsZero: true });
+    return xs.length ? Math.min(...xs) : 0;
+  },
+  MEDIAN: (...args) => {
+    const s = sorted(nums(args));
+    if (!s.length) throw new FormulaError('#NUM!');
+    const m = s.length >> 1;
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  },
+  LARGE: (range, k) => kth(nums([range]), num(k), true),
+  SMALL: (range, k) => kth(nums([range]), num(k), false),
+  'PERCENTILE.INC': (range, p) => percentileInc(nums([range]), num(p)),
+  'PERCENTILE.EXC': (range, p) => percentileExc(nums([range]), num(p)),
+  PERCENTILE: (range, p) => percentileInc(nums([range]), num(p)),
+  'QUARTILE.INC': (range, q) => percentileInc(nums([range]), Math.trunc(num(q)) / 4),
+  'QUARTILE.EXC': (range, q) => percentileExc(nums([range]), Math.trunc(num(q)) / 4),
+  QUARTILE: (range, q) => percentileInc(nums([range]), Math.trunc(num(q)) / 4),
+  'STDEV.S': (...args) => Math.sqrt(stdev(nums(args), true)),
+  'STDEV.P': (...args) => Math.sqrt(stdev(nums(args), false)),
+  STDEVP: (...args) => Math.sqrt(stdev(nums(args), false)),
+  'VAR.S': (...args) => stdev(nums(args), true),
+  'VAR.P': (...args) => stdev(nums(args), false),
+  VARP: (...args) => stdev(nums(args), false),
+  TRIMMEAN: (range, pct) => {
+    const s = sorted(nums([range]));
+    const p = num(pct);
+    if (p < 0 || p >= 1) throw new FormulaError('#NUM!');
+    const cut = Math.floor((s.length * p) / 2);
+    return mean(s.slice(cut, s.length - cut));
+  },
+  SKEW: (...args) => {
+    const xs = nums(args);
+    const n = xs.length;
+    if (n < 3) throw new FormulaError('#DIV/0!');
+    const m = mean(xs);
+    const sd = Math.sqrt(stdev(xs, true));
+    return (n / ((n - 1) * (n - 2))) * xs.reduce((a, x) => a + ((x - m) / sd) ** 3, 0);
+  },
+  PERMUT: (n, k) => {
+    const a = Math.trunc(num(n)), b = Math.trunc(num(k));
+    if (a < 0 || b < 0 || a < b) throw new FormulaError('#NUM!');
+    let r = 1;
+    for (let i = 0; i < b; i++) r *= a - i;
+    return r;
+  },
+  SLOPE: (ys, xs) => {
+    const s = pairStats(ys, xs);
+    if (!s.sxx) throw new FormulaError('#DIV/0!');
+    return s.sxy / s.sxx;
+  },
+  PEARSON: (a, b) => {
+    const s = pairStats(a, b);
+    return s.sxy / Math.sqrt(s.sxx * s.syy);
+  },
+  RSQ: (ys, xs) => {
+    const s = pairStats(ys, xs);
+    return (s.sxy * s.sxy) / (s.sxx * s.syy);
+  },
+  'RANK.EQ': (x, ref, order) => {
+    const v = num(x);
+    const xs = nums([ref]);
+    if (!xs.includes(v)) throw new FormulaError('#N/A');
+    const asc = num(order, 0) !== 0;
+    return 1 + xs.filter((y) => (asc ? y < v : y > v)).length;
+  },
+  'RANK.AVG': (x, ref, order) => {
+    const v = num(x);
+    const xs = nums([ref]);
+    const ties = xs.filter((y) => y === v).length;
+    if (!ties) throw new FormulaError('#N/A');
+    const asc = num(order, 0) !== 0;
+    return 1 + xs.filter((y) => (asc ? y < v : y > v)).length + (ties - 1) / 2;
+  },
+  'MODE.SNGL': (...args) => EXTRA_FUNCTIONS.MODE(...args),
+  SUMIFS: (target, ...pairs) => ifsNumbers(target, pairs).reduce((a, b) => a + b, 0),
+  AVERAGEIFS: (target, ...pairs) => mean(ifsNumbers(target, pairs)),
+  MAXIFS: (target, ...pairs) => {
+    const xs = ifsNumbers(target, pairs);
+    return xs.length ? Math.max(...xs) : 0;
+  },
+  MINIFS: (target, ...pairs) => {
+    const xs = ifsNumbers(target, pairs);
+    return xs.length ? Math.min(...xs) : 0;
+  },
+  MATCH: (needle, list, type) => {
+    const i = matchIndex(scalar(needle), flat(list), num(type, 1));
+    if (i < 0) throw new FormulaError('#N/A');
+    return i + 1;
+  },
+  // The engine passes its context first to CHOOSE (it's on its list of context functions).
+  CHOOSE: (_context, index, ...options) => {
+    const i = Math.trunc(num(index));
+    if (i < 1 || i > options.length) throw new FormulaError('#VALUE!');
+    return scalar(options[i - 1]) ?? 0;
+  },
+  SWITCH: (expr, ...rest) => {
+    const v = scalar(expr);
+    for (let i = 0; i + 1 < rest.length; i += 2) {
+      const c = scalar(rest[i]);
+      if (c === v || (typeof c === 'string' && typeof v === 'string' && c.toLowerCase() === v.toLowerCase())) return scalar(rest[i + 1]);
+    }
+    if (rest.length % 2) return scalar(rest[rest.length - 1]);
+    throw new FormulaError('#N/A');
+  },
+  SUBSTITUTE: (text, oldText, newText, instance) => {
+    const t = String(scalar(text) ?? '');
+    const o = String(scalar(oldText) ?? '');
+    const n = String(scalar(newText) ?? '');
+    if (!o) return t;
+    if (!instance || instance.omitted) return t.split(o).join(n);
+    const which = Math.trunc(num(instance));
+    let idx = -1;
+    for (let k = 0; k < which; k++) {
+      idx = t.indexOf(o, idx + 1);
+      if (idx < 0) return t;
+    }
+    return t.slice(0, idx) + n + t.slice(idx + o.length);
+  },
+  TEXTJOIN: (delim, ignoreEmpty, ...parts) => {
+    const skip = Boolean(scalar(ignoreEmpty));
+    const vals = parts.flatMap(flat).map((v) => (v === null || v === undefined ? '' : String(v)));
+    return (skip ? vals.filter((v) => v !== '') : vals).join(String(scalar(delim) ?? ''));
+  },
+  SUBTOTAL: (fn, ...refs) => {
+    const code = Math.trunc(num(fn)) % 100;
+    const xs = nums(refs);
+    switch (code) {
+      case 1: return mean(xs);
+      case 2: return xs.length;
+      case 3: return refs.flatMap(flat).filter((v) => v !== null && v !== undefined && v !== '').length;
+      case 4: return xs.length ? Math.max(...xs) : 0;
+      case 5: return xs.length ? Math.min(...xs) : 0;
+      case 6: return xs.reduce((a, b) => a * b, 1);
+      case 7: return Math.sqrt(stdev(xs, true));
+      case 8: return Math.sqrt(stdev(xs, false));
+      case 9: return xs.reduce((a, b) => a + b, 0);
+      case 10: return stdev(xs, true);
+      case 11: return stdev(xs, false);
+      default: throw new FormulaError('#VALUE!');
+    }
+  },
   COUNTA: (...args) => args.flatMap(flat).filter((v) => v !== null && v !== undefined && v !== '').length,
   COUNTBLANK: (...args) => args.flatMap(flat).filter((v) => v === null || v === undefined || v === '').length,
   COUNTIFS: (...args) => countIfs(args).filter(Boolean).length,

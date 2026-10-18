@@ -3,7 +3,8 @@ import { colName, inRect, rectOf, toKey, type Pos, type Rect } from '../model/ad
 import type { Sheet, Value } from '../model/types';
 import { isError } from '../model/types';
 import { formatValue } from '../engine/format';
-import { cellLook } from './cellStyle';
+import { cellLook, richRunLook } from './cellStyle';
+import { mergedBorder } from '../model/merge';
 
 export interface Selection {
   anchor: Pos;
@@ -34,6 +35,8 @@ interface Props {
   actions: GridActions;
   /** Cells where other people have their cursor. */
   peers: { key: string; name: string; color: string }[];
+  /** The workbook's base font, for files that bring their own (Excel's "Normal" style). */
+  baseFont?: { name: string; size: number };
   onCopy(cut: boolean): string;
   onPaste(text: string): void;
 }
@@ -46,7 +49,7 @@ const ROW_H = { normal: 32, compact: 26 };
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 
-export function Grid({ sheet, values, approx, sel, editing, show, actions, peers, onCopy, onPaste }: Props) {
+export function Grid({ sheet, values, approx, sel, editing, show, actions, peers, baseFont, onCopy, onPaste }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   const [resizing, setResizing] = useState<{ c: number; px: number } | null>(null);
@@ -188,6 +191,9 @@ export function Grid({ sheet, values, approx, sel, editing, show, actions, peers
         className="grid"
         style={{
           gap,
+          ...(baseFont
+            ? ({ '--cell-font': `'${baseFont.name}', var(--sans)`, '--cell-size': `${Math.round((baseFont.size * 13) / 11)}px` } as CSSProperties)
+            : {}),
           gridTemplateColumns: `${show.rowHeads ? `${HEAD_W}px ` : ''}${cols.map((c) => `${colW(c)}px`).join(' ')}`,
           gridTemplateRows: `${show.colHeads ? `${HEAD_H}px ` : ''}${rows.map((r) => `${rowH(r)}px`).join(' ')}`,
         }}
@@ -230,7 +236,8 @@ export function Grid({ sheet, values, approx, sel, editing, show, actions, peers
                 const cell = sheet.cells[key];
                 const active = r === ar && c === ac;
                 const v = values[key] ?? null;
-                const fmt = cell?.fmt;
+                // A merged block is drawn as one cell, with the outline gathered from its edges.
+                const fmt = merge && cell ? { ...cell.fmt, border: mergedBorder(sheet, merge) } : cell?.fmt;
                 const text = show.formulas && cell?.raw.startsWith('=') ? cell.raw : formatValue(v, fmt);
                 const cls = ['cell'];
                 if (fmt?.tint && fmt.tint !== 'none' && !fmt.fill) cls.push(`tint-${fmt.tint}`);
@@ -292,6 +299,14 @@ export function Grid({ sheet, values, approx, sel, editing, show, actions, peers
                   >
                     {active && editing ? (
                       <CellEditor initial={editing.initial} options={cell?.validation?.list ?? null} actions={actions} />
+                    ) : cell?.rich && !show.formulas ? (
+                      <span>
+                        {cell.rich.map((run, i) => (
+                          <span key={i} style={richRunLook(run, fmt)}>
+                            {run.text}
+                          </span>
+                        ))}
+                      </span>
                     ) : (
                       text
                     )}

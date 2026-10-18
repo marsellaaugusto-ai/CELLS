@@ -1,9 +1,12 @@
 export type NumFmt = 'general' | 'number2' | 'currency' | 'percent';
-export type Align = 'left' | 'center' | 'right';
+export type Align = 'left' | 'center' | 'right' | 'justify' | 'distributed' | 'fill' | 'centerContinuous';
 export type Tint = 'none' | 'blue' | 'green' | 'teal' | 'orange' | 'yellow' | 'red' | 'purple';
 
-export type VAlign = 'top' | 'middle' | 'bottom';
-export type BorderStyle = 'thin' | 'medium' | 'thick' | 'dashed' | 'dotted' | 'double' | 'hair';
+export type VAlign = 'top' | 'middle' | 'bottom' | 'justify' | 'distributed';
+/** Excel's border styles, kept by name so they go back unchanged. */
+export type BorderStyle =
+  | 'thin' | 'medium' | 'thick' | 'dashed' | 'dotted' | 'double' | 'hair'
+  | 'mediumDashed' | 'dashDot' | 'mediumDashDot' | 'dashDotDot' | 'mediumDashDotDot' | 'slantDashDot';
 
 export interface BorderSide {
   style: BorderStyle;
@@ -42,6 +45,21 @@ export interface Validation {
   excel?: unknown;
 }
 
+/** A piece of text with its own format, for cells that mix formats (m², bold words…). */
+export interface RichRun {
+  text: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strike?: boolean;
+  /** '#rrggbb' */
+  color?: string;
+  /** Points. */
+  size?: number;
+  font?: string;
+  vertAlign?: 'superscript' | 'subscript';
+}
+
 export interface Cell {
   /** What the person typed: a value, or a formula starting with '='. A leading ' forces text. */
   raw: string;
@@ -50,8 +68,10 @@ export interface Cell {
   note?: string;
   link?: string;
   /** Last value Excel or Google Sheets calculated, used when Cells can't calculate the formula itself. */
-  cached?: number | string | boolean;
+  cached?: number | string | boolean | ErrorValue;
   validation?: Validation;
+  /** Mixed formats inside the text, as Excel stores them. Dropped when the text is edited. */
+  rich?: RichRun[];
 }
 
 export interface Range {
@@ -71,6 +91,8 @@ export interface SheetLayout {
   frozen?: { rows: number; cols: number };
   /** Conditional formatting rules from Excel, kept so they survive a round trip. */
   conditional?: unknown[];
+  /** Excel page setup (paper, orientation, margins, scale), kept for the round trip. */
+  pageSetup?: Record<string, unknown>;
 }
 
 export interface Sheet {
@@ -90,6 +112,8 @@ export interface Workbook {
   updatedAt: string;
   /** Named ranges: name → reference, e.g. { Precios: "'Hoja 1'!$D$2:$D$9" }. */
   names?: Record<string, string>;
+  /** The file's base font (Excel's "Normal" style), used by cells that don't set their own. */
+  defaultFont?: { name: string; size: number };
 }
 
 export interface WorkbookSummary {

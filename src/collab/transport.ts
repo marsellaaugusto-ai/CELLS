@@ -4,8 +4,9 @@ import type { Peer } from './presence';
 /** Messages exchanged between copies of the same workbook. Binary Yjs data travels as base64. */
 export type Message =
   | { type: 'update'; from: string; data: string }
-  | { type: 'hello'; from: string; sv: string; data: string }
-  | { type: 'state'; from: string; to: string; data: string };
+  | { type: 'hello'; from: string; sv: string }
+  /** What the receiver is missing; `sv` asks the receiver to send back what the sender is missing. */
+  | { type: 'state'; from: string; to: string; data: string; sv?: string };
 
 export interface Transport {
   send(msg: Message): void;

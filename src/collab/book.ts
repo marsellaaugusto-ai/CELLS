@@ -49,6 +49,8 @@ export function workbookFromDoc(doc: Y.Doc): Workbook {
   };
   const names = meta.get('names') as Workbook['names'];
   if (names) wb.names = names;
+  const defaultFont = meta.get('defaultFont') as Workbook['defaultFont'];
+  if (defaultFont) wb.defaultFont = defaultFont;
   return wb;
 }
 
@@ -66,6 +68,7 @@ export function docStateFromWorkbook(wb: Workbook): Uint8Array {
     meta.set('name', wb.name);
     meta.set('updatedAt', wb.updatedAt);
     if (wb.names) meta.set('names', wb.names);
+    if (wb.defaultFont) meta.set('defaultFont', wb.defaultFont);
     doc.getArray<YSheet>('sheets').push(wb.sheets.map(sheetToY));
   });
   const state = Y.encodeStateAsUpdate(doc);

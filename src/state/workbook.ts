@@ -19,6 +19,13 @@ export type Edit =
   | { type: 'merge'; sheetId: string; rect: Rect }
   | { type: 'unmerge'; sheetId: string; rect: Rect };
 
+/** A cell with new text; mixed formats only make sense for the text they were made for. */
+function withRaw(prev: Cell | undefined, raw: string): Cell {
+  const cell: Cell = { ...prev, raw };
+  if (cell.rich && prev?.raw !== raw) delete cell.rich;
+  return cell;
+}
+
 function withCell(cells: Record<string, Cell>, key: string, cell: Cell | undefined) {
   const next = { ...cells };
   if (!cell || (cell.raw === '' && !cell.fmt)) delete next[key];
@@ -41,7 +48,7 @@ export function applyEdit(wb: Workbook, edit: Edit): Workbook {
     case 'setCell':
       return updateSheet(wb, edit.sheetId, (s) => {
         const prev = s.cells[edit.key];
-        return { ...s, cells: withCell(s.cells, edit.key, { ...prev, raw: edit.raw }) };
+        return { ...s, cells: withCell(s.cells, edit.key, withRaw(prev, edit.raw)) };
       });
     case 'format':
       return updateSheet(wb, edit.sheetId, (s) => {
@@ -57,7 +64,7 @@ export function applyEdit(wb: Workbook, edit: Edit): Workbook {
         const cells = { ...s.cells };
         for (const key of rectKeys(edit.rect)) {
           if (!cells[key]) continue;
-          if (cells[key].fmt) cells[key] = { ...cells[key], raw: '' };
+          if (cells[key].fmt) cells[key] = withRaw(cells[key], '');
           else delete cells[key];
         }
         return { ...s, cells };
@@ -68,7 +75,7 @@ export function applyEdit(wb: Workbook, edit: Edit): Workbook {
         edit.rows.forEach((row, i) =>
           row.forEach((raw, j) => {
             const key = toKey(edit.r + i, edit.c + j);
-            cells = withCell(cells, key, { ...cells[key], raw });
+            cells = withCell(cells, key, withRaw(cells[key], raw));
           }),
         );
         return {
@@ -125,7 +132,7 @@ export function applyEdit(wb: Workbook, edit: Edit): Workbook {
         let cells = s.cells;
         for (const key of rectKeys(rect)) {
           if (key === toKey(rect.r0, rect.c0) || !cells[key]) continue;
-          cells = withCell(cells, key, { ...cells[key], raw: '' });
+          cells = withCell(cells, key, withRaw(cells[key], ''));
         }
         const merges = (s.layout?.merges ?? []).filter((m) => !overlaps(m, rect));
         return { ...s, cells, layout: { ...s.layout, merges: [...merges, { ...rect }] } };

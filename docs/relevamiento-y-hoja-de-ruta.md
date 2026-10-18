@@ -157,10 +157,17 @@ Por eso el `.xlsx` es el puente en los dos sentidos.
 | Ancho de columnas, alto de filas, filas y columnas ocultas | ✅ |
 | Celdas combinadas, filas y columnas fijas | ✅ |
 | Notas, enlaces | ✅ |
+| Superíndices y formatos mezclados dentro de un texto (m², kN/m²) | ✅ |
+| Fuente base del libro (por ejemplo Arial 10) | ✅ |
+| Configuración de impresión (papel, orientación, márgenes, escala) | ⚠️ Se conserva para Excel; Cells todavía no imprime |
+| Fórmulas que leen otro archivo (`[1]Hoja!A1`) | ⚠️ Muestran el último valor de Excel; al descargar quedan como valores |
 | Listas desplegables | ✅ Se usan al escribir |
 | Otras validaciones | ⚠️ Se conservan, todavía no se aplican |
 | Formato condicional | ⚠️ Se conserva, todavía no se muestra |
 | Gráficos, imágenes | ❌ Se cuentan en el informe; no se traen |
+| Formas y cuadros de texto dibujados (esquemas, flechas, cotas) | ❌ Se cuentan en el informe |
+| Objetos incrustados (CorelDraw, ecuaciones) | ❌ Se cuentan en el informe |
+| Contraseña de protección de hojas | ❌ |
 | Tablas dinámicas, tablas con formato | ❌ Quedan los valores |
 | Macros (VBA), Apps Script | ❌ No se ejecutan (por seguridad, tampoco conviene) |
 | Texto con varios formatos dentro de una celda | ❌ Queda el texto, sin los formatos parciales |
@@ -174,8 +181,15 @@ Por eso el `.xlsx` es el puente en los dos sentidos.
 - El `.xlsx` exportado por Cells se verificó abriéndolo con LibreOffice, que recalculó bien todas
   las fórmulas, y con openpyxl (lector de Python independiente).
 
-Falta probar con archivos reales guardados por Excel y por Google Sheets, con un uso típico de
-la empresa.
+- Una planilla real de cálculo estructural guardada por Excel (7 hojas, 4.000 fórmulas, 364
+  bloques combinados). Las 4.000 fórmulas dan el mismo resultado que guardó Excel y que
+  LibreOffice al recalcular desde cero, y el archivo descargado desde Cells vuelve a dar los mismos
+  4.000 resultados en LibreOffice. Formatos, bordes, fuentes, notas e impresión salen iguales.
+  Esa prueba encontró y corrigió varios errores del motor: celdas vacías dentro de funciones,
+  cadenas largas de fórmulas, 51 funciones que la biblioteca de fórmulas traía vacías (MAX, MIN,
+  MATCH…) y errores que SUM o AVERAGE ignoraban en lugar de propagarlos como Excel.
+
+Falta probar con archivos guardados por Google Sheets.
 
 ---
 

@@ -240,7 +240,8 @@ button { cursor: pointer; }
   align-items: center;
   overflow: hidden;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--cell-size, 13px);
+  font-family: var(--cell-font, inherit);
   position: relative;
 }
 .cell.num { font-family: var(--mono); }

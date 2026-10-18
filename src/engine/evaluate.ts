@@ -5,7 +5,20 @@ import { isError } from '../model/types';
 import { translateFormula } from './translate';
 import { EXTRA_FUNCTIONS } from './functions';
 
-const { FormulaError } = FormulaParser;
+const { FormulaError, DepParser, FormulaHelpers } = FormulaParser;
+
+// Excel reads an empty cell as 0 wherever a number is expected (=POWER(A1,2) with A1 empty is 0);
+// the engine rejects it instead, so teach it the Excel rule once.
+if (!FormulaHelpers.__cellsBlankIsZero) {
+  const acceptNumber = FormulaHelpers.acceptNumber;
+  // A cell reference to an empty cell arrives either as null or as a { value: null } wrapper.
+  const isBlank = (obj: unknown) =>
+    obj === null || obj === undefined || (typeof obj === 'object' && !Array.isArray(obj) && !(obj instanceof FormulaError) && 'value' in obj && (obj as { value: unknown }).value == null);
+  FormulaHelpers.acceptNumber = function (this: unknown, obj: unknown, ...rest: unknown[]) {
+    return isBlank(obj) ? 0 : acceptNumber.call(this, obj, ...rest);
+  };
+  FormulaHelpers.__cellsBlankIsZero = true;
+}
 
 /** Computed values for every non-empty cell, by sheet id then A1 key. */
 export type Computed = Record<string, Record<string, Value>>;
@@ -83,18 +96,54 @@ export function evaluateWorkbook(wb: Workbook): Evaluation {
   const byName = new Map(wb.sheets.map((s) => [s.name.toLowerCase(), s]));
   const bounds = new Map(wb.sheets.map((s) => [s.id, usedBounds(s)]));
   const cache = new Map<string, Value>();
-  const visiting = new Set<string>();
+  const onStack = new Set<string>();
+  const circular = new Set<string>();
 
   const sheetNamed = (name: string) => byName.get(String(name).toLowerCase());
+  const nodeId = (sheet: Sheet, key: string) => `${sheet.id}!${key}`;
+  const onVariable = (name: string) => {
+    const target = names.get(name.toLowerCase());
+    const ref = target ? parseRef(target) : null;
+    if (!ref) throw new FormulaError('#NAME?');
+    return ref;
+  };
+
+  // Formula cells per sheet, to find which ones a range like A1:C50 depends on.
+  const formulaCells = new Map(
+    wb.sheets.map((s) => [s.id, Object.keys(s.cells).filter((k) => isFormula(s.cells[k].raw)).map((k) => ({ key: k, ...parseKey(k) }))]),
+  );
+
+  // The engine can't safely run one formula from inside another, so each formula's inputs
+  // are found first (DepParser) and calculated before it, in dependency order.
+  const depParser = new DepParser({ onVariable });
+  function depsOf(sheet: Sheet, key: string): [Sheet, string][] {
+    const raw = sheet.cells[key].raw;
+    const { r, c } = parseKey(key);
+    let refs: Ref[];
+    try {
+      refs = depParser.parse(translateFormula(raw.slice(1)), { sheet: sheet.name, row: r + 1, col: c + 1 });
+    } catch {
+      return [];
+    }
+    const out: [Sheet, string][] = [];
+    for (const ref of refs) {
+      const s = sheetNamed(ref.sheet);
+      if (!s) continue;
+      if ('from' in ref) {
+        for (const f of formulaCells.get(s.id)!) {
+          if (f.r >= ref.from.row - 1 && f.r <= ref.to.row - 1 && f.c >= ref.from.col - 1 && f.c <= ref.to.col - 1) out.push([s, f.key]);
+        }
+      } else {
+        const k = toKey(ref.row - 1, ref.col - 1);
+        if (isFormula(s.cells[k]?.raw ?? '')) out.push([s, k]);
+      }
+    }
+    return out;
+  }
 
   const parser = new FormulaParser({
     functions: EXTRA_FUNCTIONS,
-    onVariable: (name: string) => {
-      const target = names.get(name.toLowerCase());
-      const ref = target ? parseRef(target) : null;
-      if (!ref) throw new FormulaError('#NAME?');
-      return ref;
-    },
+    onVariable,
     onCell: ({ sheet, row, col }: { sheet: string; row: number; col: number }) => {
       const s = sheetNamed(sheet);
       if (!s) return new FormulaError('#REF!');
@@ -117,40 +166,78 @@ export function evaluateWorkbook(wb: Workbook): Evaluation {
     },
   });
 
+  function evalOne(sheet: Sheet, key: string): Value {
+    const cell = sheet.cells[key];
+    const id = nodeId(sheet, key);
+    // References to other files ("[1]Hoja!A1") can't be followed: use Excel's last value.
+    if (/\[\d+\]/.test(cell.raw) && cell.cached !== undefined) {
+      approx.add(id);
+      return cell.cached;
+    }
+    let v: Value;
+    let unsupported = false;
+    try {
+      const { r, c } = parseKey(key);
+      v = fromEngine(parser.parse(translateFormula(cell.raw.slice(1)), { sheet: sheet.name, row: r + 1, col: c + 1 }));
+    } catch (e) {
+      const message = String((e as { details?: { message?: string } })?.details?.message ?? '');
+      // An unknown function is #NAME?, as in Excel; anything else the engine can't read is #ERROR!.
+      v = { error: /is not implemented/.test(message) ? '#NAME?' : e instanceof FormulaError ? (e as { error: string }).error : '#ERROR!' };
+      unsupported = v.error === '#NAME?' || v.error === '#ERROR!';
+    }
+    // A formula Cells can't run yet (not a real spreadsheet error like #DIV/0!): if the file
+    // came with Excel's own result, show that instead.
+    if (unsupported && cell.cached !== undefined) {
+      approx.add(id);
+      return cell.cached;
+    }
+    return v;
+  }
+
+  /** Calculates a formula after everything it depends on, without recursion. */
+  function evaluateTree(sheet: Sheet, key: string) {
+    type Frame = { sheet: Sheet; key: string; id: string; deps: [Sheet, string][]; i: number };
+    const stack: Frame[] = [];
+    const push = (s: Sheet, k: string) => {
+      const id = nodeId(s, k);
+      onStack.add(id);
+      stack.push({ sheet: s, key: k, id, deps: depsOf(s, k), i: 0 });
+    };
+    push(sheet, key);
+    while (stack.length) {
+      const top = stack[stack.length - 1];
+      if (top.i < top.deps.length) {
+        const [ds, dk] = top.deps[top.i++];
+        const did = nodeId(ds, dk);
+        if (cache.has(did)) continue;
+        if (onStack.has(did)) {
+          const from = stack.findIndex((f) => f.id === did);
+          for (let j = Math.max(0, from); j < stack.length; j++) circular.add(stack[j].id);
+          continue;
+        }
+        push(ds, dk);
+        continue;
+      }
+      stack.pop();
+      onStack.delete(top.id);
+      cache.set(top.id, circular.has(top.id) ? { error: '#CIRC!' } : evalOne(top.sheet, top.key));
+    }
+  }
+
   function valueOf(sheet: Sheet, key: string): Value {
-    const id = `${sheet.id}!${key}`;
+    const id = nodeId(sheet, key);
     const hit = cache.get(id);
     if (hit !== undefined) return hit;
     const raw = sheet.cells[key]?.raw ?? '';
-    let v: Value;
     if (!isFormula(raw)) {
-      v = parseLiteral(raw);
-    } else if (visiting.has(id)) {
-      return { error: '#CIRC!' };
-    } else {
-      visiting.add(id);
-      let unsupported = false;
-      try {
-        const { r, c } = parseKey(key);
-        v = fromEngine(parser.parse(translateFormula(raw.slice(1)), { sheet: sheet.name, row: r + 1, col: c + 1 }));
-      } catch (e) {
-        const message = String((e as { details?: { message?: string } })?.details?.message ?? '');
-        // An unknown function is #NAME?, as in Excel; anything else the engine can't read is #ERROR!.
-        v = { error: /is not implemented/.test(message) ? '#NAME?' : e instanceof FormulaError ? (e as { error: string }).error : '#ERROR!' };
-        unsupported = v.error === '#NAME?' || v.error === '#ERROR!';
-      } finally {
-        visiting.delete(id);
-      }
-      // A formula Cells can't run yet (not a real spreadsheet error like #DIV/0!): if the file
-      // came with Excel's own result, show that instead.
-      const cached = sheet.cells[key]?.cached;
-      if (unsupported && cached !== undefined) {
-        v = cached;
-        approx.add(id);
-      }
+      const v = parseLiteral(raw);
+      cache.set(id, v);
+      return v;
     }
-    cache.set(id, v);
-    return v;
+    // Only reached for references the dependency pass couldn't see in advance.
+    if (onStack.has(id)) return { error: '#CIRC!' };
+    evaluateTree(sheet, key);
+    return cache.get(id)!;
   }
 
   const result: Computed = {};

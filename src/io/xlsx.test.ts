@@ -33,7 +33,7 @@ describe('readXlsx', () => {
     expect(ventas.layout?.merges).toEqual([{ r0: 11, c0: 0, r1: 12, c1: 2 }]);
     expect(ventas.layout?.frozen).toEqual({ rows: 1, cols: 1 });
     expect(ventas.layout?.colWidths?.[0]).toBeGreaterThan(150);
-    expect(ventas.layout?.rowHeights?.[0]).toBe(40);
+    expect(ventas.layout?.rowHeights?.[0]).toBeCloseTo(40);
     expect(ventas.layout?.hiddenCols).toContain(6);
     expect(ventas.layout?.conditional).toHaveLength(1);
     expect(wb.names).toEqual({ Totales: "'Ventas 2026'!$D$2:$D$4" });

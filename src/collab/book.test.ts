@@ -92,6 +92,26 @@ function room() {
 const peer = (id: string): Peer => ({ id, name: id, color: '#fff' });
 
 describe('connect', () => {
+  it('only sends differences when someone joins', async () => {
+    const sent: Message[] = [];
+    const join = room();
+    const wb = base();
+    const a = Book.fromWorkbook(wb);
+    connect(a, join('ana'), peer('ana'), () => {});
+    await Promise.resolve();
+    const b = Book.fromWorkbook(wb); // same saved copy: nothing to exchange
+    const t = join('beto');
+    const send = t.send;
+    t.send = (m) => {
+      sent.push(m);
+      send(m);
+    };
+    connect(b, t, peer('beto'), () => {});
+    await Promise.resolve();
+    const bytes = sent.reduce((n, m) => n + JSON.stringify(m).length, 0);
+    expect(bytes).toBeLessThan(400);
+  });
+
   it('brings a late joiner up to date and then streams every change', async () => {
     const join = room();
     const wb = base();

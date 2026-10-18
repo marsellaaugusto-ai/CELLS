@@ -3,3 +3,6 @@ dist
 *.tsbuildinfo
 .env
 .env.local
+
+# Pruebas con archivos privados del usuario (no se suben)
+*.local.test.ts
